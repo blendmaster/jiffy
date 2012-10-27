@@ -4,80 +4,166 @@ function map(a, fn) { return Array.prototype.map.call(a, fn) }
 function bits(byte, start, end) {
   return byte << (24 + start) >>> (32 + start - end)
 }
+function uint16(b1, b2) { return (b2 << 8) | b1 }
+
 function hex(a) { return map(a, function (n) { return n.toString(16) }).join() }
 function chars(a) {
   return map(a, function (c) { return String.fromCharCode(c) }).join('')
 }
 
-function split() {
-  var file
-  if (file = this.files[0]) {
+
+var jiffy = {
+  // split a gif image as an ArrayBuffer into:
+  // cb(err, { width, height, [frames] })
+  split: function (file, cb) {
     var reader = new FileReader
     reader.readAsArrayBuffer(file)
-    // http://www.onicos.com/staff/iz/formats/gif.html#aeb
     reader.onload = function () {
-      window.bytes = this.result
-      var data = Uint8Array(bytes)
-      if (!(chars(data.subarray(0, 6)) === 'GIF89a')) {
-        return alert('not a gif, man!')
+      // http://www.onicos.com/staff/iz/formats/gif.html#aeb
+      var data = Uint8Array(this.result)
+      if (chars(data.subarray(0, 6)) !== 'GIF89a') {
+        cb(new Error('not a gif, man!'))
+        return
       }
-      var width = Uint16Array(bytes, 6, 1)[0]
-      var height = Uint16Array(bytes, 8, 1)[0]
 
-      var colordata = data[10]
-      var gct            = bits(colordata, 0, 1)
-      //, resolution     = bits(colordata, 1, 4)
-      //, sort           = bits(colordata, 4, 5)
-        , colorTableSize = bits(colordata, 5, 8)
+      var width          = uint16(data[6], data[7])
+        , height         = uint16(data[8], data[9])
+        , gct            = bits(data[10], 0, 1)
+        , colorTableSize = bits(data[10], 5, 8)
 
-      var endOfHeader = 13
-                      + (gct === 1
-                        ? 3 * Math.pow(2, colorTableSize + 1)
-                        : 0)
+      var endOfHeader = 13 + (gct ? 3 * Math.pow(2, colorTableSize + 1) : 0)
+
       var header = data.subarray(0, endOfHeader)
-      var rest = data.subarray(endOfHeader)
+      var rest   = data.subarray(endOfHeader)
 
       // TODO detect actual GIF animation block "NETSCAPE2.0"
       // skip app extension block
       var imgdata = rest.subarray(19)
 
-      var i = 0, start, blocks = [], lctf, tableSize, bSize
-      while (i < imgdata.length && imgdata[i] !== 0x3b) { // is not trailer
-        start = i
-        i += 8 // skip over graphic control extension block
-        i += 1
-        i += 8 // skip to packed byte
-        lctf      = bits(imgdata[i], 0, 1)
-        tableSize = bits(imgdata[i], 4, 8)
-        if (lctf) { i += (3 * Math.pow(2, tableSize + 1)) }
-        i += 1 // LZW minimum code size
-        i += 1 // to bsize
+      var i = 0
+        , start
+        , blocks = []
+        , disposalMethods = []
+        , delays = []
+        , lctf
+        , tableSize
+        , bSize
 
-        // eat up data blocks (size !== 0)
-        while (bSize = imgdata[i]) {
-          i += 1
-          i += bSize
+      while (imgdata[i] !== 0x3b) { // is not the trailer
+        start = i
+
+        if (!(imgdata[i] === 0x21 && imgdata[i + 1] === 0xf9)) {
+          cb(new Error('not a graphic control extension block, bro!'))
+          return
         }
 
-        blocks.push(imgdata.subarray(start, i))
+        i += 3
+        disposalMethods.push(bits(imgdata[i], 3, 6))
+
+        i += 1
+        // if 0, use default to match browser behavior
+        delays.push((uint16(imgdata[i], imgdata[i + 1]) * 10) || 100)
+
+        i += 4 // skip over rest graphic control extension block
+        if (imgdata[i] !== 0x2c) {
+          cb(new Error('not an image block, dude!'))
+          return
+        }
+
+        i += 9 // skip to packed byte
+        lctf      = bits(imgdata[i], 0, 1)
+        tableSize = bits(imgdata[i], 4, 8)
+        i += 1
+
+        if (lctf) { i += (3 * Math.pow(2, tableSize + 1)) }
+
+        i += 1 // skip over LZW minimum code size
+
+        // eat up data blocks
+        while (bSize = imgdata[i]) { i += bSize + 1 }
 
         i += 1 //skip terminator
-      }
 
-      // draw blocks
-      var frames = document.createElement('div')
-      frames.id = 'frames'
-      blocks.forEach(function (b) {
+        blocks.push(imgdata.subarray(start, i))
+      }
+      console.log(delays)
+
+      var imgs = blocks.map(function (b, k) {
         var blob = new Blob([header, b], {type: 'image/gif'})
         var url = URL.createObjectURL(blob)
         var i = new Image
         i.src = url
-        frames.appendChild(i)
+        i.onload = load
+        return i
       })
-      document.body.replaceChild(frames, document.getElementById('frames'))
+
+      // after all images loaded
+      var j = 1
+      function load() {
+        if (++j === blocks.length) {
+          cb(null,
+            { width: width
+            , height: height
+            , frames: imgs.map(function (i, j) {
+                return { image: i
+                       , delay: delays[j]
+                       , disposalMethod: disposalMethods[j]
+                       }
+              })
+            })
+        }
+      }
     }
   }
 }
+
+var anim = { c    : document.getElementById('anim')
+           , ctx  : document.getElementById('anim').getContext('2d')
+           , tick : function () {
+               this.ctx.drawImage(this.frames[this.i].image, 0, 0)
+               this.timeout = setTimeout(this.tick, this.frames[this.i].delay)
+               if (++this.i === this.frames.length) {
+                 this.i = 0
+               }
+             }
+           , start : function (frames) {
+               this.stop()
+               this.frames = frames
+               this.i = 0
+               this.c.width = this.frames[this.i].image.width
+               this.c.height = this.frames[this.i].image.height
+               this.tick()
+             }
+           , stop  : function () { clearTimeout(this.timeout) }
+           }
+// annoying need to bind
+anim.tick = anim.tick.bind(anim)
+
+function load() {
+  var file
+  if (file = this.files[0]) {
+    jiffy.split(file, function (err, img) {
+      if (err) { throw err }
+
+      var blocks = img.blocks
+
+      var c = document.getElementById('anim')
+      c.width  = img.width
+      c.height = img.height
+
+      // draw blocks
+      var frames = document.createElement('div')
+      frames.id = 'frames'
+      img.frames.forEach(function (f) {
+        frames.appendChild(f.image)
+      })
+      document.body.replaceChild(frames, document.getElementById('frames'))
+
+      anim.start(img.frames)
+    })
+  }
+}
 var input = document.getElementById('input')
-input.addEventListener('change', split)
-split.call(input)
+input.addEventListener('change', load)
+load.call(input)
+
