@@ -1,5 +1,7 @@
 "use strict"
 
+window.URL || (window.URL = window.webkitURL)
+
 function map(a, fn) { return Array.prototype.map.call(a, fn) }
 function bits(byte, start, end) {
   return byte << (24 + start) >>> (32 + start - end)
@@ -19,9 +21,10 @@ var jiffy = {
     var reader = new FileReader
     reader.readAsArrayBuffer(file)
     reader.onload = function () {
+      window.data = this.result
       // http://www.onicos.com/staff/iz/formats/gif.html#aeb
       // http://www.w3.org/Graphics/GIF/spec-gif89a.txt
-      var data = Uint8Array(this.result)
+      var data = new Uint8Array(this.result)
       if (chars(data.subarray(0, 6)) !== 'GIF89a') {
         cb(new Error('not a gif, man!'))
         return
@@ -34,7 +37,7 @@ var jiffy = {
 
       var endOfHeader = 13 + (gct ? 3 * Math.pow(2, colorTableSize + 1) : 0)
 
-      var header = data.subarray(0, endOfHeader)
+      var header = window.header = data.subarray(0, endOfHeader)
       var rest   = data.subarray(endOfHeader)
 
       // TODO detect actual GIF animation block "NETSCAPE2.0"
@@ -92,8 +95,9 @@ var jiffy = {
         var blob = new Blob([header, b], {type: 'image/gif'})
         var url = URL.createObjectURL(blob)
         var i = new Image
-        i.src = url
         i.onload = load
+        i.onerror = function () { console.log('dawg, that image ain\'t right!') }
+        i.src = url
         return i
       })
 
@@ -193,6 +197,17 @@ function load() {
       document.body.replaceChild(frames, document.getElementById('frames'))
 
       anim.start(img.frames)
+
+      // encode vid
+      //var video = new Whammy.Video
+      //img.frames.forEach(function (f) {
+        //var c = document.createElement('canvas')
+        //c.width = f.image.width
+        //c.height = f.image.height
+        //c.getContext('2d').drawImage(f.image, 0, 0)
+        //video.add(c, f.delay)
+      //})
+      //document.getElementById('vid').src = URL.createObjectURL(video.compile())
     })
   }
 }
