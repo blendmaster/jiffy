@@ -20,6 +20,7 @@ var jiffy = {
     reader.readAsArrayBuffer(file)
     reader.onload = function () {
       // http://www.onicos.com/staff/iz/formats/gif.html#aeb
+      // http://www.w3.org/Graphics/GIF/spec-gif89a.txt
       var data = Uint8Array(this.result)
       if (chars(data.subarray(0, 6)) !== 'GIF89a') {
         cb(new Error('not a gif, man!'))
@@ -86,7 +87,6 @@ var jiffy = {
 
         blocks.push(imgdata.subarray(start, i))
       }
-      console.log(delays)
 
       var imgs = blocks.map(function (b, k) {
         var blob = new Blob([header, b], {type: 'image/gif'})
@@ -117,27 +117,60 @@ var jiffy = {
   }
 }
 
-var anim = { c    : document.getElementById('anim')
-           , ctx  : document.getElementById('anim').getContext('2d')
-           , tick : function () {
-               this.ctx.drawImage(this.frames[this.i].image, 0, 0)
-               this.timeout = setTimeout(this.tick, this.frames[this.i].delay)
-               if (++this.i === this.frames.length) {
-                 this.i = 0
+var anim = { c       : document.getElementById('anim')
+           , ctx     : document.getElementById('anim').getContext('2d')
+           , loaded  : false
+           , playing : false
+           , tick    : function () {
+               if (this.loaded) {
+                 this.ctx.drawImage(this.frames[this.i].image, 0, 0)
+                 if (this.playing) {
+                   this.timeout = setTimeout(this.tick, this.frames[this.i].delay)
+                 }
+                 if (++this.i === this.frames.length) {
+                   this.i = 0
+                 }
                }
              }
-           , start : function (frames) {
+           , back    : function () {
+               this.stop()
+               this.i = Math.max(0, this.i - 2)
+               this.tick()
+             }
+           , forward  : function () {
+               this.stop()
+               this.tick()
+             }
+           , start   : function (frames) {
                this.stop()
                this.frames = frames
                this.i = 0
                this.c.width = this.frames[this.i].image.width
                this.c.height = this.frames[this.i].image.height
+               this.loaded = true
+               this.playing = true
                this.tick()
              }
-           , stop  : function () { clearTimeout(this.timeout) }
+           , stop    : function () {
+               clearTimeout(this.timeout)
+               this.playing = false
+             }
+           , pause   : function () {
+               this.stop()
+             }
+           , play    : function () {
+               this.stop()
+               this.playing = true
+               this.tick()
+             }
            }
 // annoying need to bind
 anim.tick = anim.tick.bind(anim)
+
+document.getElementById('play').addEventListener('click', anim.play.bind(anim))
+document.getElementById('pause').addEventListener('click', anim.pause.bind(anim))
+document.getElementById('back').addEventListener('click', anim.back.bind(anim))
+document.getElementById('forward').addEventListener('click', anim.forward.bind(anim))
 
 function load() {
   var file
